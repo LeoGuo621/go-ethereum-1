@@ -22,6 +22,8 @@ import (
 	"sort"
 	"sync"
 
+	lru "github.com/hashicorp/golang-lru"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -29,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-	lru "github.com/hashicorp/golang-lru"
 )
 
 const sampleNumber = 3 // Number of transactions sampled in a block
@@ -120,6 +121,7 @@ func NewOracle(backend OracleBackend, params Config) *Oracle {
 	go func() {
 		var lastHead common.Hash
 		for ev := range headEvent {
+			//监听headEvent这个通道的事件，
 			if ev.Block.ParentHash() != lastHead {
 				cache.Purge()
 			}
@@ -147,7 +149,9 @@ func NewOracle(backend OracleBackend, params Config) *Oracle {
 // necessary to add the basefee to the returned number to fall back to the legacy
 // behavior.
 func (oracle *Oracle) SuggestTipCap(ctx context.Context) (*big.Int, error) {
+	//获取最新的区块头
 	head, _ := oracle.backend.HeaderByNumber(ctx, rpc.LatestBlockNumber)
+	//获取head的哈希
 	headHash := head.Hash()
 
 	// If the latest gasprice is still available, return it.
@@ -250,7 +254,7 @@ func (s *txSorter) Less(i, j int) bool {
 	return tip1.Cmp(tip2) < 0
 }
 
-// getBlockPrices calculates the lowest transaction gas price in a given block
+// getBlockPrices calculates the lowest transaction gas price（指的是前limit个最低的gasPrice） in a given block
 // and sends it to the result channel. If the block is empty or all transactions
 // are sent by the miner itself(it doesn't make any sense to include this kind of
 // transaction prices for sampling), nil gasprice is returned.
@@ -266,18 +270,24 @@ func (oracle *Oracle) getBlockValues(ctx context.Context, signer types.Signer, b
 	// Sort the transaction by effective tip in ascending sort.
 	txs := make([]*types.Transaction, len(block.Transactions()))
 	copy(txs, block.Transactions())
+	//获取一个区块中的所有tx，某些旧的tx有baseFee，根据有效GasTip来排序
 	sorter := newSorter(txs, block.BaseFee())
 	sort.Sort(sorter)
 
 	var prices []*big.Int
 	for _, tx := range sorter.txs {
+		//获取这个tx中真正有效的gasTip
 		tip, _ := tx.EffectiveGasTip(block.BaseFee())
+		//这个ignoreUnder的含义就是低于这个gasPrice就不考虑，想把最低的gasPrice设置得高点
 		if ignoreUnder != nil && tip.Cmp(ignoreUnder) == -1 {
 			continue
 		}
+		//此处是通过判断sender是否为矿工，如果是就排除，因为矿工设置得毫无意义
 		sender, err := types.Sender(signer, tx)
 		if err == nil && sender != block.Coinbase() {
+			//如果不是矿工出的tx，则将该tx的gas推荐值tip加入数组
 			prices = append(prices, tip)
+			//这个limit就是抽样数，如果已经获得足够多的tx，就退出循环
 			if len(prices) >= limit {
 				break
 			}
