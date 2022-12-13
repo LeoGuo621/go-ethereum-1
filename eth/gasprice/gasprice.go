@@ -25,6 +25,7 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
@@ -73,7 +74,8 @@ type Oracle struct {
 
 	checkBlocks, percentile           int
 	maxHeaderHistory, maxBlockHistory int
-	historyCache                      *lru.Cache
+
+	historyCache *lru.Cache[cacheKey, processedFees]
 }
 
 // NewOracle returns a new gasprice oracle which can recommend suitable
@@ -115,7 +117,7 @@ func NewOracle(backend OracleBackend, params Config) *Oracle {
 		log.Warn("Sanitizing invalid gasprice oracle max block history", "provided", params.MaxBlockHistory, "updated", maxBlockHistory)
 	}
 
-	cache, _ := lru.New(2048)
+	cache := lru.NewCache[cacheKey, processedFees](2048)
 	headEvent := make(chan core.ChainHeadEvent, 1)
 	backend.SubscribeChainHeadEvent(headEvent)
 	go func() {
